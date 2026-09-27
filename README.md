@@ -5,12 +5,11 @@ A mirror for tinyhttpd(Tinyhttpd非官方镜像,Fork自[sourceForge](https://sou
 ### Prepare 
 Compile for Linux
 ```
- To compile for Linux:
-  1) Comment out the #include <pthread.h> line.
-  2) Comment out the line that defines the variable newthread.
-  3) Comment out the two lines that run pthread_create().
-  4) Uncomment the line that runs accept_request().
-  5) Remove -lsocket from the Makefile.
+This is a POSIX project and should be built on Linux or in WSL. The Windows
+MinGW compiler does not provide headers such as `sys/socket.h` or `unistd.h`.
+In VS Code on Windows, install the WSL extension and reopen this folder in a
+WSL window; then use the Linux C/C++ toolchain and run `make` in the project
+directory. The Makefile links pthreads for the server.
 ```
 
 <p>&nbsp; &nbsp; &nbsp;每个函数的作用：</p>

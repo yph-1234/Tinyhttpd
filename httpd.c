@@ -4,14 +4,7 @@
  * CSE 4344 (Network concepts), Prof. Zeigler
  * University of Texas at Arlington
  */
-/* This program compiles for Sparc Solaris 2.6.
- * To compile for Linux:
- *  1) Comment out the #include <pthread.h> line.
- *  2) Comment out the line that defines the variable newthread.
- *  3) Comment out the two lines that run pthread_create().
- *  4) Uncomment the line that runs accept_request().
- *  5) Remove -lsocket from the Makefile.
- */
+/* This program uses POSIX sockets and pthreads. */
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -34,7 +27,7 @@
 #define STDOUT  1
 #define STDERR  2
 
-void accept_request(void *);
+void *accept_request(void *);
 void bad_request(int);
 void cat(int, FILE *);
 void cannot_execute(int);
@@ -47,12 +40,23 @@ void serve_file(int, const char *);
 int startup(u_short *);
 void unimplemented(int);
 
+static int is_cgi_file(const char *path, mode_t mode)
+{
+    const char *extension;
+
+    if (!(mode & (S_IXUSR | S_IXGRP | S_IXOTH)))
+        return 0;
+
+    extension = strrchr(path, '.');
+    return extension != NULL && strcasecmp(extension, ".cgi") == 0;
+}
+
 /**********************************************************************/
 /* A request has caused a call to accept() on the server port to
  * return.  Process the request appropriately.
  * Parameters: the socket connected to the client */
 /**********************************************************************/
-void accept_request(void *arg)
+void *accept_request(void *arg)
 {
     int client = (intptr_t)arg;
     char buf[1024];
@@ -79,7 +83,8 @@ void accept_request(void *arg)
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
     {
         unimplemented(client);
-        return;
+        close(client);
+        return NULL;
     }
 
     if (strcasecmp(method, "POST") == 0)
@@ -119,10 +124,16 @@ void accept_request(void *arg)
     else
     {
         if ((st.st_mode & S_IFMT) == S_IFDIR)
+        {
             strcat(path, "/index.html");
-        if ((st.st_mode & S_IXUSR) ||
-                (st.st_mode & S_IXGRP) ||
-                (st.st_mode & S_IXOTH)    )
+            if (stat(path, &st) == -1)
+            {
+                not_found(client);
+                close(client);
+                return NULL;
+            }
+        }
+        if (is_cgi_file(path, st.st_mode))
             cgi = 1;
         if (!cgi)
             serve_file(client, path);
@@ -131,6 +142,7 @@ void accept_request(void *arg)
     }
 
     close(client);
+    return NULL;
 }
 
 /**********************************************************************/
@@ -142,15 +154,15 @@ void bad_request(int client)
     char buf[1024];
 
     sprintf(buf, "HTTP/1.0 400 BAD REQUEST\r\n");
-    send(client, buf, sizeof(buf), 0);
+    send(client, buf, strlen(buf), 0);
     sprintf(buf, "Content-type: text/html\r\n");
-    send(client, buf, sizeof(buf), 0);
+    send(client, buf, strlen(buf), 0);
     sprintf(buf, "\r\n");
-    send(client, buf, sizeof(buf), 0);
+    send(client, buf, strlen(buf), 0);
     sprintf(buf, "<P>Your browser sent a bad request, ");
-    send(client, buf, sizeof(buf), 0);
+    send(client, buf, strlen(buf), 0);
     sprintf(buf, "such as a POST without a Content-Length.\r\n");
-    send(client, buf, sizeof(buf), 0);
+    send(client, buf, strlen(buf), 0);
 }
 
 /**********************************************************************/
@@ -279,7 +291,7 @@ void execute_cgi(int client, const char *path,
             sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
             putenv(length_env);
         }
-        execl(path, NULL);
+        execl(path, path, (char *)NULL);
         exit(0);
     } else {    /* parent */
         close(cgi_output[1]);
@@ -409,13 +421,15 @@ void serve_file(int client, const char *filename)
 
     resource = fopen(filename, "r");
     if (resource == NULL)
+    {
         not_found(client);
+    }
     else
     {
         headers(client, filename);
         cat(client, resource);
+        fclose(resource);
     }
-    fclose(resource);
 }
 
 /**********************************************************************/
@@ -497,6 +511,7 @@ int main(void)
 
     server_sock = startup(&port);
     printf("httpd running on port %d\n", port);
+    fflush(stdout);
 
     while (1)
     {
@@ -505,9 +520,10 @@ int main(void)
                 &client_name_len);
         if (client_sock == -1)
             error_die("accept");
-        /* accept_request(&client_sock); */
-        if (pthread_create(&newthread , NULL, (void *)accept_request, (void *)(intptr_t)client_sock) != 0)
+        if (pthread_create(&newthread, NULL, accept_request, (void *)(intptr_t)client_sock) != 0) {
             perror("pthread_create");
+            close(client_sock);
+        }
     }
 
     close(server_sock);
